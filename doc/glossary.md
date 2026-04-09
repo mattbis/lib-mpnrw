@@ -1,0 +1,27 @@
+# Glossary
+
+- **Barycenter**: The center of mass of a system of bodies.
+- **Celestial**: Relating to the sky or outer space.
+- **Celestial Transformation**: The process of transforming coordinates from one celestial reference frame to another.
+- **Delaunay arguments**: The arguments used to calculate the nutation matrix.
+- **ECEF**: Earth-Centered, Earth-Fixed.
+- **GMST**: Greenwich Mean Sidereal Time.
+- **IAU**: International Astronomical Union.
+- **IERS**: International Earth Rotation and Reference Systems Service.
+- **ICRS**: International Celestial Reference System.
+- **ITRS**: International Terrestrial Reference System.
+- **TT**: Terrestrial Time.
+- **Julian Date**: A continuous count of days since a fixed epoch.
+- **Greenwich Mean Sidereal Time (GMST)**: The angle between the prime meridian of the Earth and the vernal equinox, measured in degrees.
+- **Polar Motion**: The variation in the position of the Earth's geographic poles.
+- **Precession**: The long-term changes in the orientation of the Earth's rotational axis.
+- **Nutation**: The short-term periodic variations in the Earth's axis.
+- **Radians**: A unit of angular measure, equal to the angle subtended at the center of a circle by an arc equal in length to the radius.
+- **Rotation**: The Earth's daily rotation (Greenwich Mean Sidereal Time).
+- **TAI**: International Atomic Time.
+- **Universal Address**: A unique address for a location on Earth, defined by the PNRW transformation.
+- **Universal Space Vector**: A vector that represents the position of a location on Earth in space, defined by the PNRW transformation.
+- **UT1**: Universal Time 1.
+- **UTC**: Coordinated Universal Time.
+- **WGS84**: World Geodetic System 1984.
+- **Wobble**: Polar Motion or the variation in the position of the Earth's geographic poles. Due to the Earth's rotation, the poles are not fixed in space. Since the core and mantle are not perfectly rigid, the Earth's rotation causes the poles to move slightly. This movement is known as wobble.

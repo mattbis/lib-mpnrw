@@ -1,0 +1,26 @@
+{
+  "name": "lib-mpnrw",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "M_PNRW: Celestial Transformation Engine",
+  "main": "src.mjs/M_PNRW.mjs",
+  "exports": {
+    "./*": "./src.mjs/*.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mattbis/lib-mpnrw.git"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "celestial",
+    "transformation",
+    "pnrw",
+    "astronomy"
+  ],
+  "author": "Matthew Bishop",
+  "license": "GPL-3.0-or-later"
+}
+
