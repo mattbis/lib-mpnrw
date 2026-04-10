@@ -46,6 +46,39 @@ export class M_PNRW {
 
     // --- CONVERSION & UTILITY METHODS ---
 
+    // TODO(me): so far we got here in that we have to refactor the internals somewhat
+    // to allow deterministic arithmetic that works the same on all architecture
+    // and allows the parralelllelel universe concept to work
+
+    /**
+     * Converts the "Sealed Envelope" back into numbers
+     * @param {Uint8Array} uint8_buffer - The sealed envelope.
+     * @example 
+     * ```javascript
+     * var address = engine.depack_vector(
+     *  new Uint8Array([
+     *      1, 2, 3, 4, 5, 6, 7, 8, 
+     *      9, 10, 11, 12, 13, 14, 15, 16, 
+     *      17, 18, 19, 20, 21, 22, 23, 24, 
+     *      25, 26, 27, 28, 29, 30, 31, 32
+     *  ])
+     * )
+     * ```
+     * @returns {number[]} The universal address.
+     */
+    depack_vector(uint8_buffer) {
+        var view= new DataView(uint8_buffer.buffer)
+        
+        // Extract BigInts based on your schema's fixed byte-offsets
+        var lat_bi=    view.getBigInt64(0)
+        var lon_bi=    view.getBigInt64(8)
+        var height_bi= view.getBigInt64(16)
+        var date_bi=   view.getBigInt64(24)
+        var sun_bi=    view.getBigInt64(32) // The "Clue" vector
+
+        //return this.core_engine(lat_bi, lon_bi, height_bi, date_bi, sun_bi)
+    }
+
     /**
      * Calculates the Julian Date from a JavaScript Date object.
      * @param {Date} date - The date to convert.
@@ -97,11 +130,42 @@ export class M_PNRW {
      * @returns {number} The distance between the two vectors.
      */
     get_distance(v1, v2) {
+        // this is faster than using Math.pow I think..
+        // distance = sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
         var dx= v1[0] - v2[0]
         var dy= v1[1] - v2[1]
         var dz= v1[2] - v2[2]
 
         return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
+    }
+
+    /**
+     * Calculates the position of the Sun in ICRF coordinates for a given Julian Date.
+     * @param {number} jd - The Julian Date.
+     * @returns {number[]} [x, y, z] in meters (ICRF).
+     */
+    get_sun_vector(jd) {
+        // t = Julian centuries from J2000.0
+        var t=      (jd - 2451545.0) / 36525
+        // l = mean longitude of the Sun
+        var l=      (280.460 + 36000.771 * t) % 360
+        // g = mean anomaly of the Sun
+        var g=      (357.528 + 35999.050 * t) * this.rad_deg
+        // lambda = mean longitude of the Sun
+        var lambda= (l + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * this.rad_deg
+        // r_au = distance from the Sun to the Earth in astronomical units
+        var r_au=   1.00014 - 0.01671 * Math.cos(g) - 0.00014 * Math.cos(2 * g)
+        // eps = obliquity of the ecliptic
+        var eps=    (23.439 - 0.013 * t) * this.rad_deg
+        // au_km = astronomical unit in kilometers
+        var au_km=  149597870.7
+
+        // Rotate ecliptic -> ICRF (equatorial) so frame matches get_universal_address
+        return [
+            r_au * Math.cos(lambda) * au_km,
+            r_au * Math.sin(lambda) * Math.cos(eps) * au_km,
+            r_au * Math.sin(lambda) * Math.sin(eps) * au_km
+        ]
     }
 
     // --- MATRIX MATH ---

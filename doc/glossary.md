@@ -3,6 +3,7 @@
 - **Barycenter**: The center of mass of a system of bodies.
 - **Celestial**: Relating to the sky or outer space.
 - **Celestial Transformation**: The process of transforming coordinates from one celestial reference frame to another.
+- **DGGS**: Discrete Global Grid System. A hierarchical tessellation of the Earth's surface.
 - **Delaunay arguments**: The arguments used to calculate the nutation matrix.
 - **ECEF**: Earth-Centered, Earth-Fixed.
 - **GMST**: Greenwich Mean Sidereal Time.
@@ -19,6 +20,7 @@
 - **Radians**: A unit of angular measure, equal to the angle subtended at the center of a circle by an arc equal in length to the radius.
 - **Rotation**: The Earth's daily rotation (Greenwich Mean Sidereal Time).
 - **TAI**: International Atomic Time.
+- **Tessellation**: The division of a surface into smaller shapes, called tiles, that fit together without overlapping.
 - **Universal Address**: A unique address for a location on Earth, defined by the PNRW transformation.
 - **Universal Space Vector**: A vector that represents the position of a location on Earth in space, defined by the PNRW transformation.
 - **UT1**: Universal Time 1.
