@@ -110,7 +110,7 @@ export class M_PNRW {
      * @param {number} e_sq - Square of the first eccentricity. Defaults to WGS84.
      * @returns {number[]} [x, y, z] in meters (ECEF)
      */
-    to_ecef(lat, lon, height, a = M_PNRW.WGS84_A, e_sq = M_PNRW.WGS84_E_SQ) {
+    to_ecef(lat, lon, height, a= M_PNRW.WGS84_A, e_sq= M_PNRW.WGS84_E_SQ) {
         var rad_lat= lat * this.rad_deg
         var rad_lon= lon * this.rad_deg
         var n_phi= a / Math.sqrt(1 - e_sq * Math.pow(Math.sin(rad_lat), 2))
