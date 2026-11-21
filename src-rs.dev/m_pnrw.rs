@@ -338,7 +338,7 @@ impl M_PNRW {
     }
 
     /// Calculates the position of the Sun in ICRF equatorial coordinates for a given Julian Date.
-    /// Returns `[x, y, z]` in kilometers (matching `src.mjs/M_PNRW.mjs`).
+    /// Returns `[x, y, z]` in kilometers (matching `src-mjs.dev/M_PNRW.mjs`).
     pub fn get_sun_vector(&self, jd: f64) -> Vec3 {
         // t = Julian centuries from J2000.0
         let t = (jd - 2_451_545.0) / 36_525.0;

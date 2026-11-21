@@ -1,4 +1,4 @@
-import { M_PNRW } from '../src.mjs/M_PNRW.mjs'
+import { M_PNRW } from '../src-mjs.dev/M_PNRW.mjs'
 
 var engine = new M_PNRW()
 

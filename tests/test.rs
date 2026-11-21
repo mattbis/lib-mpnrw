@@ -1,4 +1,4 @@
-//! Integration tests mirroring `tests/test.mjs` and verifying parity with `src.mjs/M_PNRW.mjs`.
+//! Integration tests mirroring `tests/test.mjs` and verifying parity with `src-mjs.dev/M_PNRW.mjs`.
 
 use lib_mpnrw::{M_PNRW, MpnrwError, UtcDateTime};
 use std::f64::consts::PI;

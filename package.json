@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "M_PNRW: Celestial Transformation Engine",
-  "main": "src.mjs/M_PNRW.mjs",
+  "main": "src-mjs.dev/M_PNRW.mjs",
   "exports": {
-    "./*": "./src.mjs/*.mjs"
+    "./*": "./src-mjs.dev/*.mjs"
   },
   "repository": {
     "type": "git",

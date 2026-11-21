@@ -13,7 +13,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { M_PNRW } from '../src.mjs/M_PNRW.mjs'
+import { M_PNRW } from '../src-mjs.dev/M_PNRW.mjs'
 
 
 async function runTest() {

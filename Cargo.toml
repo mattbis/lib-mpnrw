@@ -11,4 +11,4 @@ publish = false
 
 [lib]
 name = "lib_mpnrw"
-path = "src.rs/lib.rs"
+path = "src-rs.dev/lib.rs"
