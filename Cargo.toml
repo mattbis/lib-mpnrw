@@ -1,0 +1,14 @@
+[package]
+name = "lib-mpnrw"
+version = "1.0.0"
+edition = "2024"
+description = "M_PNRW: Celestial Transformation Engine"
+authors = ["Matthew Bishop"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/mattbis/lib-mpnrw.git"
+keywords = ["celestial", "transformation", "pnrw", "astronomy"]
+publish = false
+
+[lib]
+name = "lib_mpnrw"
+path = "src.rs/lib.rs"

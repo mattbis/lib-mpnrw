@@ -23,3 +23,7 @@ yarn-error.log*
 # Project specific
 dist/
 build/
+
+# Rust / Cargo
+target/
+Cargo.lock
