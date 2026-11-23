@@ -1,370 +1,309 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) Matthew & Contributors — Free Software (GNU GPLv3)
+
 /**
- * M_PNRW: Celestial Transformation Engine Class
- * 
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- * 
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- * 
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- * 
+ * M_PNRW: Celestial Transformation Engine (IEEE-754 float64 reference)
+ *
  * Logic: M = P * N * R * W
+ *
+ * Exposes Dual Surface API: stateless topic-prefixed functional primitives
+ * (`mpnrw_*`) and thin `M_PNRW` class wrapper.
  */
 
+// 1p
+// (none)
+
+// 2p
+// (none)
+
+// 3p
+// (none - zero external npm dependencies in resident core)
+
+function invariant(cond, msg) {
+    if (!cond) {
+        throw new Error(msg)
+    }
+}
+
+const WGS84_A= 6378137
+const WGS84_F= 1 / 298.257223563
+const WGS84_E_SQ= (2 * WGS84_F) - (WGS84_F ** 2)
+
+export const MPNRW_CONSTANTS= Object.freeze({
+    WGS84_A: WGS84_A,
+    WGS84_F: WGS84_F,
+    WGS84_E_SQ: WGS84_E_SQ
+})
+
+export const MPNRW_NUTATION_TERMS= Object.freeze([
+    Object.freeze({ l: 0, lp: 0, f: 0, d: 0, om: 1, psi: -17206, eps: 9205 }),
+    Object.freeze({ l: 0, lp: 0, f: 2, d: -2, om: 2, psi: -1317, eps: 573 }),
+    Object.freeze({ l: 0, lp: 0, f: 2, d: 0, om: 2, psi: -227, eps: 97 }),
+    Object.freeze({ l: 0, lp: 1, f: 0, d: 0, om: 0, psi: 147, eps: 7 })
+])
+
+export function mpnrw_create_ctx() {
+    return Object.freeze({
+        rad_deg: Math.PI / 180,
+        mas_to_rad: (Math.PI / 180) / 3600000,
+        nutation_terms: MPNRW_NUTATION_TERMS
+    })
+}
+
+export function mpnrw_depack_vector(uint8_buffer) {
+    invariant(uint8_buffer instanceof Uint8Array && uint8_buffer.byteLength >= 40, 'mpnrw_depack_vector: 40-byte Uint8Array required')
+    var view= new DataView(uint8_buffer.buffer, uint8_buffer.byteOffset, uint8_buffer.byteLength)
+    return {
+        lat_bi: view.getBigInt64(0),
+        lon_bi: view.getBigInt64(8),
+        height_bi: view.getBigInt64(16),
+        date_bi: view.getBigInt64(24),
+        sun_bi: view.getBigInt64(32)
+    }
+}
+
+export function mpnrw_julian_date(date) {
+    invariant(date instanceof Date, 'date must be a Date object')
+    invariant(!isNaN(date.getTime()), 'Invalid date')
+
+    var year= date.getUTCFullYear()
+    var month= date.getUTCMonth() + 1
+    var day= date.getUTCDate()
+    var hours= date.getUTCHours() + (date.getUTCMinutes() / 60) + (date.getUTCSeconds() / 3600)
+
+    return (367 * year) -
+        Math.floor(7 * (year + Math.floor((month + 9) / 12)) / 4) +
+        Math.floor(275 * month / 9) +
+        day + 1721013.5 + (hours / 24)
+}
+
+export function mpnrw_to_ecef(ctx, lat, lon, height, a= MPNRW_CONSTANTS.WGS84_A, e_sq= MPNRW_CONSTANTS.WGS84_E_SQ) {
+    var rad_lat= lat * ctx.rad_deg
+    var rad_lon= lon * ctx.rad_deg
+    var n_phi= a / Math.sqrt(1 - e_sq * Math.pow(Math.sin(rad_lat), 2))
+
+    var x= (n_phi + height) * Math.cos(rad_lat) * Math.cos(rad_lon)
+    var y= (n_phi + height) * Math.cos(rad_lat) * Math.sin(rad_lon)
+    var z= (n_phi * (1 - e_sq) + height) * Math.sin(rad_lat)
+
+    return [x, y, z]
+}
+
+export function mpnrw_distance(v1, v2) {
+    var dx= v1[0] - v2[0]
+    var dy= v1[1] - v2[1]
+    var dz= v1[2] - v2[2]
+    return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
+}
+
+export function mpnrw_sun_vector(ctx, jd) {
+    var t= (jd - 2451545.0) / 36525
+    var l= (280.460 + 36000.771 * t) % 360
+    var g= (357.528 + 35999.050 * t) * ctx.rad_deg
+    var lambda= (l + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * ctx.rad_deg
+    var r_au= 1.00014 - 0.01671 * Math.cos(g) - 0.00014 * Math.cos(2 * g)
+    var eps= (23.439 - 0.013 * t) * ctx.rad_deg
+    var au_km= 149597870.7
+
+    return [
+        r_au * Math.cos(lambda) * au_km,
+        r_au * Math.sin(lambda) * Math.cos(eps) * au_km,
+        r_au * Math.sin(lambda) * Math.sin(eps) * au_km
+    ]
+}
+
+export function mpnrw_multiply_matrices(a, b) {
+    var res= [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    for (let i= 0; i < 3; i= i + 1) {
+        for (let j= 0; j < 3; j= j + 1) {
+            var sum= 0
+            for (let k= 0; k < 3; k= k + 1) {
+                sum= sum + (a[i][k] * b[k][j])
+            }
+            res[i][j]= sum
+        }
+    }
+    return res
+}
+
+export function mpnrw_multiply_matrix_vector(m, v) {
+    return [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
+    ]
+}
+
+export function mpnrw_rot_y(angle) {
+    var c= Math.cos(angle)
+    var s= Math.sin(angle)
+    return [[c, 0, -s], [0, 1, 0], [s, 0, c]]
+}
+
+export function mpnrw_rot_z(angle) {
+    var c= Math.cos(angle)
+    var s= Math.sin(angle)
+    return [[c, s, 0], [-s, c, 0], [0, 0, 1]]
+}
+
+export function mpnrw_p_matrix(ctx, t) {
+    var zeta= (2306.2181 * t) * (ctx.rad_deg / 3600)
+    var z= (2306.2181 * t) * (ctx.rad_deg / 3600)
+    var theta= (2004.3109 * t) * (ctx.rad_deg / 3600)
+
+    var rz_zeta= mpnrw_rot_z(-zeta)
+    var ry_theta= mpnrw_rot_y(theta)
+    var rz_z= mpnrw_rot_z(-z)
+
+    return mpnrw_multiply_matrices(rz_z, mpnrw_multiply_matrices(ry_theta, rz_zeta))
+}
+
+export function mpnrw_n_matrix(ctx, t) {
+    var l= (134.963 + 477198.868 * t) * ctx.rad_deg
+    var lp= (357.529 + 35999.050 * t) * ctx.rad_deg
+    var f= (93.272 + 483202.018 * t) * ctx.rad_deg
+    var d= (297.850 + 445267.111 * t) * ctx.rad_deg
+    var om= (125.045 - 1934.136 * t) * ctx.rad_deg
+
+    var d_psi= 0
+    var d_eps= 0
+    var eps= (23.43929 - 0.013 * t) * ctx.rad_deg
+
+    for (let i= 0; i < ctx.nutation_terms.length; i= i + 1) {
+        var term= ctx.nutation_terms[i]
+        var arg= (term.l * l) + (term.lp * lp) + (term.f * f) + (term.d * d) + (term.om * om)
+        d_psi= d_psi + term.psi * Math.sin(arg)
+        d_eps= d_eps + term.eps * Math.cos(arg)
+    }
+
+    var dp= d_psi * ctx.mas_to_rad
+    var de= d_eps * ctx.mas_to_rad
+
+    return [
+        [1, -dp * Math.cos(eps), -dp * Math.sin(eps)],
+        [dp * Math.cos(eps), 1, -de],
+        [dp * Math.sin(eps), de, 1]
+    ]
+}
+
+export function mpnrw_r_matrix(ctx, jd) {
+    var days_since_j2000= jd - 2451545.0
+    var gmst_hours= (18.697374558 + 24.06570982441908 * days_since_j2000) % 24
+    if (gmst_hours < 0) gmst_hours= gmst_hours + 24
+
+    var theta= gmst_hours * 15 * ctx.rad_deg
+    return [
+        [Math.cos(theta), Math.sin(theta), 0],
+        [-Math.sin(theta), Math.cos(theta), 0],
+        [0, 0, 1]
+    ]
+}
+
+export function mpnrw_w_matrix(xp= 0, yp= 0) {
+    return [
+        [1, 0, xp],
+        [0, 1, -yp],
+        [-xp, yp, 1]
+    ]
+}
+
+export function mpnrw_universal_address(ctx, lat, lon, height, date, sun_vector) {
+    invariant(typeof lat === 'number' && lat >= -90 && lat <= 90, 'Latitude must be a number between -90 and 90')
+    invariant(typeof lon === 'number' && lon >= -180 && lon <= 180, 'Longitude must be a number between -180 and 180')
+    invariant(typeof height === 'number' && height >= 0, 'Height must be a number greater than or equal to 0')
+    invariant(date instanceof Date, 'Date must be a Date object')
+    invariant(Array.isArray(sun_vector) && sun_vector.length === 3, 'Sun vector must be an array of 3 numbers')
+
+    var jd= mpnrw_julian_date(date)
+    var t= (jd - 2451545.0) / 36525
+    var local_v= mpnrw_to_ecef(ctx, lat, lon, height)
+
+    var p= mpnrw_p_matrix(ctx, t)
+    var n= mpnrw_n_matrix(ctx, t)
+    var r= mpnrw_r_matrix(ctx, jd)
+    var w= mpnrw_w_matrix()
+
+    var m_pn= mpnrw_multiply_matrices(p, n)
+    var m_pnr= mpnrw_multiply_matrices(m_pn, r)
+    var master_m= mpnrw_multiply_matrices(m_pnr, w)
+    var space_v= mpnrw_multiply_matrix_vector(master_m, local_v)
+
+    return [
+        space_v[0] + sun_vector[0],
+        space_v[1] + sun_vector[1],
+        space_v[2] + sun_vector[2]
+    ]
+}
+
+// --- THIN OOP CLASS WRAPPER ---
 
 export class M_PNRW {
-    /* These are the standard parameters for the WGS84 geodetic reference system, used in GPS and most modern geodetic calculations */
+    static WGS84_A= MPNRW_CONSTANTS.WGS84_A
+    static WGS84_F= MPNRW_CONSTANTS.WGS84_F
+    static WGS84_E_SQ= MPNRW_CONSTANTS.WGS84_E_SQ
 
-    // The semi-major axis of the WGS84 ellipsoid, defined as 6,378,137 meters
-    static WGS84_A= 6378137
-
-    // The flattening factor of the WGS84 ellipsoid, defined as 1/298.257223563
-    static WGS84_F= 1 / 298.257223563
-
-    // The square of the first eccentricity of the WGS84 ellipsoid
-    static WGS84_E_SQ= (2 * M_PNRW.WGS84_F) - (M_PNRW.WGS84_F ** 2)
+    #ctx
 
     constructor() {
-        // --- CONSTANTS ---
-        this.rad_deg= Math.PI / 180
-        this.mas_to_rad= (Math.PI / 180) / 3600000
-
-        // Principal Nutation Terms (IAU 2000B simplified)
-        this.nutation_terms= [
-            { l: 0, lp: 0, f: 0, d: 0, om: 1, psi: -17206, eps: 9205 },
-            { l: 0, lp: 0, f: 2, d: -2, om: 2, psi: -1317, eps: 573 },
-            { l: 0, lp: 0, f: 2, d: 0, om: 2, psi: -227, eps: 97 },
-            { l: 0, lp: 1, f: 0, d: 0, om: 0, psi: 147, eps: 7 }
-        ]
+        this.#ctx= mpnrw_create_ctx()
+        this.rad_deg= this.#ctx.rad_deg
+        this.mas_to_rad= this.#ctx.mas_to_rad
+        this.nutation_terms= this.#ctx.nutation_terms
     }
 
-    // --- CONVERSION & UTILITY METHODS ---
-
-    // TODO(me): so far we got here in that we have to refactor the internals somewhat
-    // to allow deterministic arithmetic that works the same on all architecture
-    // and allows the parralelllelel universe concept to work
-
-    /**
-     * Converts the "Sealed Envelope" back into numbers
-     * @param {Uint8Array} uint8_buffer - The sealed envelope.
-     * @example 
-     * ```javascript
-     * var address = engine.depack_vector(
-     *  new Uint8Array([
-     *      1, 2, 3, 4, 5, 6, 7, 8, 
-     *      9, 10, 11, 12, 13, 14, 15, 16, 
-     *      17, 18, 19, 20, 21, 22, 23, 24, 
-     *      25, 26, 27, 28, 29, 30, 31, 32
-     *  ])
-     * )
-     * ```
-     * @returns {number[]} The universal address.
-     */
     depack_vector(uint8_buffer) {
-        var view= new DataView(uint8_buffer.buffer)
-        
-        // Extract BigInts based on your schema's fixed byte-offsets
-        var lat_bi=    view.getBigInt64(0)
-        var lon_bi=    view.getBigInt64(8)
-        var height_bi= view.getBigInt64(16)
-        var date_bi=   view.getBigInt64(24)
-        var sun_bi=    view.getBigInt64(32) // The "Clue" vector
-
-        //return this.core_engine(lat_bi, lon_bi, height_bi, date_bi, sun_bi)
+        return mpnrw_depack_vector(uint8_buffer)
     }
 
-    /**
-     * Calculates the Julian Date from a JavaScript Date object.
-     * @param {Date} date - The date to convert.
-     * @returns {number} The Julian Date.
-     */
     get_julian_date(date) {
-        if (!(date instanceof Date)) throw new Error('date must be a Date object')
-        if (isNaN(date.getTime())) throw new Error('Invalid date')
-
-        var year= date.getUTCFullYear()
-        var month= date.getUTCMonth() + 1
-        var day= date.getUTCDate()
-        var hours= date.getUTCHours() + (date.getUTCMinutes() / 60) + (date.getUTCSeconds() / 3600)
-        
-        var jd= (367 * year) - 
-                 Math.floor(7 * (year + Math.floor((month + 9) / 12)) / 4) + 
-                 Math.floor(275 * month / 9) + 
-                 day + 1721013.5 + (hours / 24)
-
-        return jd
+        return mpnrw_julian_date(date)
     }
 
-    /**
-     * Converts ECEF coordinates to a 3D vector.
-     * @param {number} lat - Latitude in degrees
-     * @param {number} lon - Longitude in degrees
-     * @param {number} height - Height above ellipsoid in meters
-     * @param {number} a - Semi-major axis of the ellipsoid (meters). Defaults to WGS84.
-     * @param {number} e_sq - Square of the first eccentricity. Defaults to WGS84.
-     * @returns {number[]} [x, y, z] in meters (ECEF)
-     */
     to_ecef(lat, lon, height, a= M_PNRW.WGS84_A, e_sq= M_PNRW.WGS84_E_SQ) {
-        var rad_lat= lat * this.rad_deg
-        var rad_lon= lon * this.rad_deg
-        var n_phi= a / Math.sqrt(1 - e_sq * Math.pow(Math.sin(rad_lat), 2))
-        
-        var x= (n_phi + height) * Math.cos(rad_lat) * Math.cos(rad_lon)
-        var y= (n_phi + height) * Math.cos(rad_lat) * Math.sin(rad_lon)
-        var z= (n_phi * (1 - e_sq) + height) * Math.sin(rad_lat)
-
-        return [x, y, z]
+        return mpnrw_to_ecef(this.#ctx, lat, lon, height, a, e_sq)
     }
 
-    /**
-     * Calculates the distance between two 3D vectors. This is needed since in space, 
-     * the distance between two points is not the same as the distance on the surface of the Earth.
-     * @param {number[]} v1 - The first vector [x, y, z].
-     * @param {number[]} v2 - The second vector [x, y, z].
-     * @returns {number} The distance between the two vectors.
-     */
     get_distance(v1, v2) {
-        // this is faster than using Math.pow I think..
-        // distance = sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
-        var dx= v1[0] - v2[0]
-        var dy= v1[1] - v2[1]
-        var dz= v1[2] - v2[2]
-
-        return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
+        return mpnrw_distance(v1, v2)
     }
 
-    /**
-     * Calculates the position of the Sun in ICRF coordinates for a given Julian Date.
-     * @param {number} jd - The Julian Date.
-     * @returns {number[]} [x, y, z] in meters (ICRF).
-     */
     get_sun_vector(jd) {
-        // t = Julian centuries from J2000.0
-        var t=      (jd - 2451545.0) / 36525
-        // l = mean longitude of the Sun
-        var l=      (280.460 + 36000.771 * t) % 360
-        // g = mean anomaly of the Sun
-        var g=      (357.528 + 35999.050 * t) * this.rad_deg
-        // lambda = mean longitude of the Sun
-        var lambda= (l + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * this.rad_deg
-        // r_au = distance from the Sun to the Earth in astronomical units
-        var r_au=   1.00014 - 0.01671 * Math.cos(g) - 0.00014 * Math.cos(2 * g)
-        // eps = obliquity of the ecliptic
-        var eps=    (23.439 - 0.013 * t) * this.rad_deg
-        // au_km = astronomical unit in kilometers
-        var au_km=  149597870.7
-
-        // Rotate ecliptic -> ICRF (equatorial) so frame matches get_universal_address
-        return [
-            r_au * Math.cos(lambda) * au_km,
-            r_au * Math.sin(lambda) * Math.cos(eps) * au_km,
-            r_au * Math.sin(lambda) * Math.sin(eps) * au_km
-        ]
+        return mpnrw_sun_vector(this.#ctx, jd)
     }
 
-    // --- MATRIX MATH ---
-
-    /**
-     * Multiplies two 3x3 matrices.
-     * @param {number[][]} a - The first matrix.
-     * @param {number[][]} b - The second matrix.
-     * @returns {number[][]} The resulting matrix.
-     */
     multiply_matrices(a, b) {
-        var res= [[0,0,0], [0,0,0], [0,0,0]]
-
-        for (var i= 0; i < 3; i++) {
-            for (var j= 0; j < 3; j++) {
-                for (var k= 0; k < 3; k++) {
-                    res[i][j] += a[i][k] * b[k][j]
-                }
-            }
-        }
-
-        return res
+        return mpnrw_multiply_matrices(a, b)
     }
 
-    /**
-     * Multiplies a 3x3 matrix by a 3D vector.
-     * @param {number[][]} m - The matrix.
-     * @param {number[]} v - The vector.
-     * @returns {number[]} The resulting vector.
-     */
     multiply_matrix_vector(m, v) {
-        return [
-            m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-            m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-            m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
-        ]
+        return mpnrw_multiply_matrix_vector(m, v)
     }
 
-    // --- PNRW COMPONENT GENERATORS ---
-
-    /**
-     * Generates a rotation matrix for rotation around the y-axis.
-     * @param {number} angle - The angle of rotation in radians.
-     * @returns {number[][]} The rotation matrix.
-     */
     rot_y(angle) {
-        var c= Math.cos(angle), s= Math.sin(angle)
-        
-        return [[c, 0, -s], [0, 1, 0], [s, 0, c]]
+        return mpnrw_rot_y(angle)
     }
 
-    /**
-     * Generates a rotation matrix for rotation around the z-axis.
-     * @param {number} angle - The angle of rotation in radians.
-     * @returns {number[][]} The rotation matrix.
-     */
     rot_z(angle) {
-        var c= Math.cos(angle), s= Math.sin(angle)
-
-        return [[c, s, 0], [-s, c, 0], [0, 0, 1]]
+        return mpnrw_rot_z(angle)
     }
 
-    /**
-     * Generates the Precession matrix (P) using IAU 1976 precession angles.
-     * @param {number} t - Time in Julian centuries from J2000.0.
-     * @returns {number[][]} The precession matrix.
-     */
     get_p_matrix(t) {
-        // Proper IAU 1976 Precession angles
-        var zeta= (2306.2181 * t) * (this.rad_deg / 3600)
-        var z= (2306.2181 * t) * (this.rad_deg / 3600)
-        var theta= (2004.3109 * t) * (this.rad_deg / 3600)
-        
-        // P = Rz(-z) * Ry(theta) * Rz(-zeta)
-        var rz_zeta= this.rot_z(-zeta)
-        var ry_theta= this.rot_y(theta)
-        var rz_z= this.rot_z(-z)
-        
-        return this.multiply_matrices(rz_z, this.multiply_matrices(ry_theta, rz_zeta))
+        return mpnrw_p_matrix(this.#ctx, t)
     }
 
-    /**
-     * Generates the Nutation matrix (N) using IAU 2000B nutation terms.
-     * @param {number} t - Time in Julian centuries from J2000.0.
-     * @returns {number[][]} The nutation matrix.
-     */
     get_n_matrix(t) {
-        // The 5 fundamental Delaunay arguments
-        var l= (134.963 + 477198.868 * t) * this.rad_deg
-        var lp= (357.529 + 35999.050 * t) * this.rad_deg
-        var f= (93.272 + 483202.018 * t) * this.rad_deg
-        var d= (297.850 + 445267.111 * t) * this.rad_deg
-        var om= (125.045 - 1934.136 * t) * this.rad_deg
-
-        var d_psi= 0, d_eps= 0
-        var eps= (23.43929 - 0.013 * t) * this.rad_deg
-
-        for (var i= 0; i < this.nutation_terms.length; i++) {
-            var term= this.nutation_terms[i]
-            var arg= (term.l * l) + (term.lp * lp) + (term.f * f) + (term.d * d) + (term.om * om)
-            d_psi += term.psi * Math.sin(arg)
-            d_eps += term.eps * Math.cos(arg)
-        }
-
-        var dp= d_psi * this.mas_to_rad, de= d_eps * this.mas_to_rad
-
-        return [
-            [1, -dp * Math.cos(eps), -dp * Math.sin(eps)],
-            [dp * Math.cos(eps), 1, -de],
-            [dp * Math.sin(eps), de, 1]
-        ]
+        return mpnrw_n_matrix(this.#ctx, t)
     }
 
-    /**
-     * Generates the Rotation matrix (R) using Greenwich Mean Sidereal Time (GMST).
-     * @param {number} jd - The Julian Date.
-     * @returns {number[][]} The rotation matrix.
-     */
     get_r_matrix(jd) {
-        // Correct GMST calculation treating time dynamically
-        var days_since_j2000= jd - 2451545.0
-        var gmst_hours= (18.697374558 + 24.06570982441908 * days_since_j2000) % 24
-        if (gmst_hours < 0) gmst_hours += 24
-        
-        var theta= gmst_hours * 15 * this.rad_deg
-
-        return [
-            [Math.cos(theta), Math.sin(theta), 0],
-            [-Math.sin(theta), Math.cos(theta), 0],
-            [0, 0, 1]
-        ]
+        return mpnrw_r_matrix(this.#ctx, jd)
     }
 
-    /**
-     * Generates the Wobble matrix (W) using polar motion coordinates.
-     * @param {number} xp - Polar motion in the x-direction (radians).
-     * @param {number} yp - Polar motion in the y-direction (radians).
-     * @returns {number[][]} The wobble matrix.
-     */
     get_w_matrix(xp= 0, yp= 0) {
-        // Polar motion — pass xp, yp in radians from IERS bulletin for full accuracy
-        return [
-            [1,   0,  xp],
-            [0,   1, -yp],
-            [-xp, yp,  1]
-        ]
+        return mpnrw_w_matrix(xp, yp)
     }
 
-    // --- MAIN ENGINE ---
-
-    /**
-     * Calculates the Universal Address for a given location and time.
-     * @param {number} lat - Latitude in degrees (WGS84 ellipsoid)
-     * @param {number} lon - Longitude in degrees (WGS84 ellipsoid)
-     * @param {number} height - Height above ellipsoid in meters
-     * @param {Date} date - The date and time for the transformation
-     * @param {number[]} sun_vector - The position vector of the Sun or Barycenter in ICRS [x, y, z] in km
-     * @returns {number[]} The Universal Space Vector [x, y, z] in meters
-     */
     get_universal_address(lat, lon, height, date, sun_vector) {
-        if (typeof lat !== 'number' || lat < -90 || lat > 90) {
-            throw new Error('Latitude must be a number between -90 and 90')
-        }
-        if (typeof lon !== 'number' || lon < -180 || lon > 180) {
-            throw new Error('Longitude must be a number between -180 and 180')
-        }
-        if (typeof height !== 'number' || height < 0) {
-            throw new Error('Height must be a number greater than or equal to 0')
-        }
-        if (!(date instanceof Date)) {
-            throw new Error('Date must be a Date object')
-        }
-        if (!Array.isArray(sun_vector) || sun_vector.length !== 3) {
-            throw new Error('Sun vector must be an array of 3 numbers')
-        }
-
-        var jd= this.get_julian_date(date)
-        // t = Julian centuries from J2000.0
-        var t= (jd - 2451545.0) / 36525
-        // local_v = ECEF coordinates of the location
-        var local_v= this.to_ecef(lat, lon, height)
-        
-        var p= this.get_p_matrix(t)
-        var n= this.get_n_matrix(t)
-        var r= this.get_r_matrix(jd)
-        var w= this.get_w_matrix()
-        // m_pn = P * N
-        var m_pn= this.multiply_matrices(p, n)
-        // m_pnr = P * N * R
-        var m_pnr= this.multiply_matrices(m_pn, r)
-        // master_m = P * N * R * W
-        var master_m= this.multiply_matrices(m_pnr, w)
-        // space_v = master_m * local_v
-        var space_v= this.multiply_matrix_vector(master_m, local_v)
-        // universal_address = space_v + sun_vector
-        return [
-            space_v[0] + sun_vector[0],
-            space_v[1] + sun_vector[1],
-            space_v[2] + sun_vector[2]
-        ]
+        return mpnrw_universal_address(this.#ctx, lat, lon, height, date, sun_vector)
     }
 }
