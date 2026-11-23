@@ -12,6 +12,8 @@
     "url": "https://github.com/mattbis/lib-mpnrw.git"
   },
   "scripts": {
+    "check": "node -e \"import('node:fs').then(async fs => { const { execFileSync } = await import('node:child_process'); for (const f of fs.globSync('{src-mjs.dev,tests,doc}/**/*.mjs')) execFileSync(process.execPath, ['--check', f], { stdio: 'inherit' }); })\"",
+    "pretest": "npm run check",
     "test": "node --test tests/*.mjs"
   },
   "keywords": [
