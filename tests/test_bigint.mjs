@@ -149,3 +149,29 @@ test('M_PNRW_BigInt sun vector parity and bit-exact determinism', () => {
     )
     assert.deepEqual(addr1, addr2)
 })
+
+// SOFA validation suite t_c2t06a, MJD 53736 TT = UT1.
+// The equatorial Greenwich site selects the first row of the published C2T matrix.
+for (const fixed of [false, true]) {
+    test('celestial reference, quarter turn, milliseconds and solar offset, fixed=' + fixed, () => {
+        const e= fixed ? new M_PNRW_BigInt() : new M_PNRW()
+        const encode= fixed ? mpnrw_fp_from_number : Number
+        const decode= fixed ? mpnrw_fp_to_number : Number
+        const zero= encode(0)
+        const origin= [zero, zero, zero]
+        const orientation= { xp: encode(2.55060238e-7), yp: encode(1.860359247e-6) }
+        const at= ms => e.get_universal_address(zero, zero, zero, new Date(ms), origin, orientation).map(decode)
+        const site= at(1136073600000)
+        const expected= [-0.181033213, 0.983476981, 0.000065556].map(v => v * 6378137)
+        assert.ok(Math.hypot(...site.map((v, i) => v - expected[i])) < 10)
+        const later= at(1136073600001)
+        const step= Math.hypot(...later.map((v, i) => v - site[i]))
+        assert.ok(step > 0.44 && step < 0.49)
+        const quarter= encode(2451545 + (6 - 18.697374558) / 24.06570982441908)
+        const rotated= e.multiply_matrix_vector(e.get_r_matrix(quarter), [encode(1), zero, zero]).map(decode)
+        assert.ok(Math.hypot(rotated[0], rotated[1] - 1, rotated[2]) < 1e-8)
+        const jd= encode(2451545)
+        const offset= e.get_heliocentric_earth_m(jd)
+        assert.deepEqual(offset, e.get_sun_vector(jd).map(v => v * (fixed ? -1000n : -1000)))
+    })
+}

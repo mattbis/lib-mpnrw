@@ -13,14 +13,18 @@ fn test_full_pipeline_greenwich_j2000() {
 
     assert!(result.iter().all(|v| v.is_finite()));
     // Exact parity check against `node tests/test.mjs`
-    assert!((result[0] - 723_084.554_488).abs() < 1e-5, "X={}", result[0]);
     assert!(
-        (result[1] - 3_914_507.712_602).abs() < 1e-5,
+        (result[0] - 722_578.329_441).abs() < 1e-5,
+        "X={}",
+        result[0]
+    );
+    assert!(
+        (result[1] - -3_914_552.214_023).abs() < 1e-5,
         "Y={}",
         result[1]
     );
     assert!(
-        (result[2] - 4_966_704.225_846).abs() < 1e-5,
+        (result[2] - 4_966_742.813_298).abs() < 1e-5,
         "Z={}",
         result[2]
     );
@@ -35,9 +39,9 @@ fn test_usage_parity_charing_cross() {
         .unwrap();
 
     // Exact parity check against `node doc/usage.mjs`
-    assert!((result[0] - 3_962_422.971).abs() < 1e-2, "X={}", result[0]);
-    assert!((result[1] - 150_761.920).abs() < 1e-2, "Y={}", result[1]);
-    assert!((result[2] - 4_979_046.273).abs() < 1e-2, "Z={}", result[2]);
+    assert!((result[0] - 3_987_154.848).abs() < 1e-2, "X={}", result[0]);
+    assert!((result[1] - -168_439.660).abs() < 1e-2, "Y={}", result[1]);
+    assert!((result[2] - 4_958_694.494).abs() < 1e-2, "Z={}", result[2]);
 }
 
 #[test]
@@ -45,7 +49,7 @@ fn test_gmst_sanity_at_j2000() {
     let engine = M_PNRW::new();
     let r_mat = engine.get_r_matrix(2_451_545.0);
 
-    let mut theta_rad = r_mat[0][1].atan2(r_mat[0][0]);
+    let mut theta_rad = r_mat[1][0].atan2(r_mat[0][0]);
     if theta_rad < 0.0 {
         theta_rad += 2.0 * PI;
     }
@@ -146,4 +150,31 @@ fn test_input_validation() {
         engine.get_universal_address(0.0, 0.0, -1.0, date, [0.0; 3]),
         Err(MpnrwError::InvalidHeight)
     );
+}
+
+#[test]
+fn terrestrial_to_celestial_reference() {
+    use lib_mpnrw::EarthOrientation;
+    let e = M_PNRW::new();
+    let orientation = EarthOrientation {
+        xp: 2.55060238e-7,
+        yp: 1.860359247e-6,
+        ..Default::default()
+    };
+    // SOFA t_c2t06a, MJD 53736 TT = UT1. First row of C2T is column one of T2C.
+    let expected = [-0.181033213, 0.983476981, 0.000065556].map(|v| v * 6378137.0);
+    let site = e
+        .get_universal_address_ms(0., 0., 0., 1136073600000, [0.; 3], orientation)
+        .unwrap();
+    assert!(e.get_distance(site, expected) < 10.);
+    let later = e
+        .get_universal_address_ms(0., 0., 0., 1136073600001, [0.; 3], orientation)
+        .unwrap();
+    assert!((0.44..0.49).contains(&e.get_distance(site, later)));
+    let jd = 2451545.0;
+    let offset = e.get_heliocentric_earth_m(jd);
+    assert_eq!(offset, e.get_sun_vector(jd).map(|v| -1000. * v));
+    let quarter = 2451545.0 + (6.0 - 18.697374558) / 24.06570982441908;
+    let rotated = e.multiply_matrix_vector(e.get_r_matrix(quarter), [1., 0., 0.]);
+    assert!(e.get_distance(rotated, [0., 1., 0.]) < 1e-8);
 }

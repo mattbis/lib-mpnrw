@@ -18,5 +18,6 @@
 pub mod m_pnrw;
 
 pub use m_pnrw::{
-    DepackedVector, M_PNRW, MPnrw, Mat3, MpnrwError, NutationTerm, UtcDateTime, Vec3,
+    DepackedVector, EarthOrientation, M_PNRW, MPnrw, Mat3, MpnrwError, NutationTerm, UtcDateTime,
+    Vec3,
 };

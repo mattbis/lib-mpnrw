@@ -133,6 +133,15 @@ impl UtcDateTime {
     }
 }
 
+/// Time offsets in seconds and IERS polar motion in radians.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EarthOrientation {
+    pub dut1: f64,
+    pub tt_minus_utc: f64,
+    pub xp: f64,
+    pub yp: f64,
+}
+
 /// Unpacked 64-bit signed integer fields from a 40-byte "Sealed Envelope" buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DepackedVector {
@@ -164,12 +173,18 @@ impl fmt::Display for MpnrwError {
                 write!(f, "Longitude must be a finite number between -180 and 180")
             }
             Self::InvalidHeight => {
-                write!(f, "Height must be a finite number greater than or equal to 0")
+                write!(
+                    f,
+                    "Height must be a finite number greater than or equal to 0"
+                )
             }
             Self::InvalidDate(reason) => write!(f, "Invalid date: {reason}"),
             Self::InvalidSunVector => write!(f, "Sun vector components must be finite numbers"),
             Self::BufferTooShort { expected, actual } => {
-                write!(f, "Buffer too short: expected at least {expected} bytes, got {actual}")
+                write!(
+                    f,
+                    "Buffer too short: expected at least {expected} bytes, got {actual}"
+                )
             }
         }
     }
@@ -287,18 +302,17 @@ impl M_PNRW {
     pub fn get_julian_date(&self, date: UtcDateTime) -> Result<f64, MpnrwError> {
         date.validate()?;
 
-        let year = date.year as i64;
-        let month = date.month as i64;
-        let day = date.day as f64;
-        let hours =
-            (date.hour as f64) + (date.minute as f64 / 60.0) + (date.second as f64 / 3600.0);
-
-        let term1 = (7 * (year + (month + 9).div_euclid(12))).div_euclid(4);
-        let term2 = (275 * month).div_euclid(9);
-
-        let jd = (367 * year - term1 + term2) as f64 + day + 1_721_013.5 + (hours / 24.0);
-
-        Ok(jd)
+        // Gregorian calendar to Julian day number at noon.
+        let a = (14 - i64::from(date.month)) / 12;
+        let y = i64::from(date.year) + 4800 - a;
+        let m = i64::from(date.month) + 12 * a - 3;
+        let day = i64::from(date.day) + (153 * m + 2) / 5 + 365 * y + y.div_euclid(4)
+            - y.div_euclid(100)
+            + y.div_euclid(400)
+            - 32045;
+        let seconds =
+            f64::from(date.hour) * 3600.0 + f64::from(date.minute) * 60.0 + f64::from(date.second);
+        Ok(day as f64 - 0.5 + seconds / 86400.0)
     }
 
     /// Converts geodetic coordinates on the WGS84 ellipsoid to an ECEF 3D vector `[x, y, z]` in meters.
@@ -337,7 +351,7 @@ impl M_PNRW {
         (dx * dx + dy * dy + dz * dz).sqrt()
     }
 
-    /// Calculates the position of the Sun in ICRF equatorial coordinates for a given Julian Date.
+    /// Calculates the position of the Sun in mean equatorial coordinates of date for a given Julian Date.
     /// Returns `[x, y, z]` in kilometers (matching `src-mjs.dev/M_PNRW.mjs`).
     pub fn get_sun_vector(&self, jd: f64) -> Vec3 {
         // t = Julian centuries from J2000.0
@@ -355,12 +369,21 @@ impl M_PNRW {
         // au_km = astronomical unit in kilometers
         let au_km = 149_597_870.7;
 
-        // Rotate ecliptic -> ICRF (equatorial) so frame matches get_universal_address
+        // Ecliptic to equatorial axes of date.
         [
             r_au * lambda.cos() * au_km,
             r_au * lambda.sin() * eps.cos() * au_km,
             r_au * lambda.sin() * eps.sin() * au_km,
         ]
+    }
+
+    /// Approximate Sun-to-Earth offset in metres on mean J2000 axes.
+    pub fn get_heliocentric_earth_m(&self, jd_tt: f64) -> Vec3 {
+        let t = (jd_tt - 2451545.0) / 36525.0;
+        self.multiply_matrix_vector(
+            self.get_p_matrix(t),
+            self.get_sun_vector(jd_tt).map(|v| -1000.0 * v),
+        )
     }
 
     // --- MATRIX MATH ---
@@ -413,10 +436,10 @@ impl M_PNRW {
         let z = (2306.2181 * t) * arcsec_to_rad;
         let theta = (2004.3109 * t) * arcsec_to_rad;
 
-        // P = Rz(-z) * Ry(theta) * Rz(-zeta)
-        let rz_zeta = self.rot_z(-zeta);
-        let ry_theta = self.rot_y(theta);
-        let rz_z = self.rot_z(-z);
+        // Mean equator of date to mean J2000.
+        let rz_zeta = self.rot_z(zeta);
+        let ry_theta = self.rot_y(-theta);
+        let rz_z = self.rot_z(z);
 
         self.multiply_matrices(rz_z, self.multiply_matrices(ry_theta, rz_zeta))
     }
@@ -447,12 +470,12 @@ impl M_PNRW {
 
         let dp = d_psi * self.mas_to_rad;
         let de = d_eps * self.mas_to_rad;
-        let (sin_eps, cos_eps) = eps.sin_cos();
+        let sin_eps = eps.sin();
 
         [
-            [1.0, -dp * cos_eps, -dp * sin_eps],
-            [dp * cos_eps, 1.0, -de],
-            [dp * sin_eps, de, 1.0],
+            [1.0, 0.0, dp * sin_eps],
+            [0.0, 1.0, de],
+            [-dp * sin_eps, -de, 1.0],
         ]
     }
 
@@ -467,31 +490,73 @@ impl M_PNRW {
         let theta = gmst_hours * 15.0 * self.rad_deg;
         let (s, c) = theta.sin_cos();
 
-        [[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]]
+        [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]
     }
 
     /// Generates the Wobble matrix (W) using polar motion coordinates (`xp`, `yp` in radians).
     pub fn get_w_matrix(&self, xp: f64, yp: f64) -> Mat3 {
-        [[1.0, 0.0, xp], [0.0, 1.0, -yp], [-xp, yp, 1.0]]
+        [[1.0, 0.0, -xp], [0.0, 1.0, yp], [xp, -yp, 1.0]]
     }
 
     // --- MAIN ENGINE ---
 
-    /// Calculates the Universal Address `[x, y, z]` for a given location, UTC time, and sun vector.
+    /// Calculates the Universal Address `[x, y, z]` for a given location, UTC time, and origin offset.
     ///
     /// - `lat`: Latitude in degrees (`-90.0..=90.0`, WGS84)
     /// - `lon`: Longitude in degrees (`-180.0..=180.0`, WGS84)
     /// - `height`: Height above ellipsoid in meters (`>= 0.0`)
     /// - `date`: UTC date and time for the transformation
-    /// - `sun_vector`: Position vector of the Sun or Barycenter in ICRS `[x, y, z]`
+    /// - `origin_to_earth_m`: Origin to Earth centre in metres on mean J2000 axes `[x, y, z]`
     pub fn get_universal_address(
         &self,
         lat: f64,
         lon: f64,
         height: f64,
         date: UtcDateTime,
-        sun_vector: Vec3,
+        origin_to_earth_m: Vec3,
     ) -> Result<Vec3, MpnrwError> {
+        self.address_at_jd(
+            lat,
+            lon,
+            height,
+            self.get_julian_date(date)?,
+            origin_to_earth_m,
+            EarthOrientation::default(),
+        )
+    }
+
+    /// Unix UTC milliseconds, with explicit Earth orientation.
+    pub fn get_universal_address_ms(
+        &self,
+        lat: f64,
+        lon: f64,
+        height: f64,
+        utc_ms: i64,
+        origin_to_earth_m: Vec3,
+        orientation: EarthOrientation,
+    ) -> Result<Vec3, MpnrwError> {
+        let jd = 2440587.5 + utc_ms as f64 / 86400000.0;
+        self.address_at_jd(lat, lon, height, jd, origin_to_earth_m, orientation)
+    }
+
+    fn address_at_jd(
+        &self,
+        lat: f64,
+        lon: f64,
+        height: f64,
+        jd: f64,
+        origin_to_earth_m: Vec3,
+        orientation: EarthOrientation,
+    ) -> Result<Vec3, MpnrwError> {
+        let EarthOrientation {
+            dut1,
+            tt_minus_utc,
+            xp,
+            yp,
+        } = orientation;
+        if ![dut1, tt_minus_utc, xp, yp].iter().all(|v| v.is_finite()) {
+            return Err(MpnrwError::InvalidDate("non-finite Earth orientation"));
+        }
         if !lat.is_finite() || !(-90.0..=90.0).contains(&lat) {
             return Err(MpnrwError::InvalidLatitude);
         }
@@ -501,20 +566,20 @@ impl M_PNRW {
         if !height.is_finite() || height < 0.0 {
             return Err(MpnrwError::InvalidHeight);
         }
-        if !sun_vector.iter().all(|v| v.is_finite()) {
+        if !origin_to_earth_m.iter().all(|v| v.is_finite()) {
             return Err(MpnrwError::InvalidSunVector);
         }
 
-        let jd = self.get_julian_date(date)?;
+        let jd_tt = jd + tt_minus_utc / 86400.0;
         // t = Julian centuries from J2000.0
-        let t = (jd - 2_451_545.0) / 36_525.0;
+        let t = (jd_tt - 2_451_545.0) / 36_525.0;
         // local_v = ECEF coordinates of the location
         let local_v = self.to_ecef(lat, lon, height);
 
         let p = self.get_p_matrix(t);
         let n = self.get_n_matrix(t);
-        let r = self.get_r_matrix(jd);
-        let w = self.get_w_matrix(0.0, 0.0);
+        let r = self.get_r_matrix(jd + dut1 / 86400.0);
+        let w = self.get_w_matrix(xp, yp);
 
         // m_pn = P * N
         let m_pn = self.multiply_matrices(p, n);
@@ -525,11 +590,11 @@ impl M_PNRW {
         // space_v = master_m * local_v
         let space_v = self.multiply_matrix_vector(master_m, local_v);
 
-        // universal_address = space_v + sun_vector
+        // universal_address = space_v + origin_to_earth_m
         Ok([
-            space_v[0] + sun_vector[0],
-            space_v[1] + sun_vector[1],
-            space_v[2] + sun_vector[2],
+            space_v[0] + origin_to_earth_m[0],
+            space_v[1] + origin_to_earth_m[1],
+            space_v[2] + origin_to_earth_m[2],
         ])
     }
 }

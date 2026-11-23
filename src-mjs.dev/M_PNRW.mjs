@@ -66,15 +66,7 @@ export function mpnrw_julian_date(date) {
     invariant(date instanceof Date, 'date must be a Date object')
     invariant(!isNaN(date.getTime()), 'Invalid date')
 
-    var year= date.getUTCFullYear()
-    var month= date.getUTCMonth() + 1
-    var day= date.getUTCDate()
-    var hours= date.getUTCHours() + (date.getUTCMinutes() / 60) + (date.getUTCSeconds() / 3600)
-
-    return (367 * year) -
-        Math.floor(7 * (year + Math.floor((month + 9) / 12)) / 4) +
-        Math.floor(275 * month / 9) +
-        day + 1721013.5 + (hours / 24)
+    return 2440587.5 + date.getTime() / 86400000
 }
 
 export function mpnrw_to_ecef(ctx, lat, lon, height, a= MPNRW_CONSTANTS.WGS84_A, e_sq= MPNRW_CONSTANTS.WGS84_E_SQ) {
@@ -151,9 +143,9 @@ export function mpnrw_p_matrix(ctx, t) {
     var z= (2306.2181 * t) * (ctx.rad_deg / 3600)
     var theta= (2004.3109 * t) * (ctx.rad_deg / 3600)
 
-    var rz_zeta= mpnrw_rot_z(-zeta)
-    var ry_theta= mpnrw_rot_y(theta)
-    var rz_z= mpnrw_rot_z(-z)
+    var rz_zeta= mpnrw_rot_z(zeta)
+    var ry_theta= mpnrw_rot_y(-theta)
+    var rz_z= mpnrw_rot_z(z)
 
     return mpnrw_multiply_matrices(rz_z, mpnrw_multiply_matrices(ry_theta, rz_zeta))
 }
@@ -180,9 +172,9 @@ export function mpnrw_n_matrix(ctx, t) {
     var de= d_eps * ctx.mas_to_rad
 
     return [
-        [1, -dp * Math.cos(eps), -dp * Math.sin(eps)],
-        [dp * Math.cos(eps), 1, -de],
-        [dp * Math.sin(eps), de, 1]
+        [1, 0, dp * Math.sin(eps)],
+        [0, 1, de],
+        [-dp * Math.sin(eps), -de, 1]
     ]
 }
 
@@ -193,35 +185,44 @@ export function mpnrw_r_matrix(ctx, jd) {
 
     var theta= gmst_hours * 15 * ctx.rad_deg
     return [
-        [Math.cos(theta), Math.sin(theta), 0],
-        [-Math.sin(theta), Math.cos(theta), 0],
+        [Math.cos(theta), -Math.sin(theta), 0],
+        [Math.sin(theta), Math.cos(theta), 0],
         [0, 0, 1]
     ]
 }
 
 export function mpnrw_w_matrix(xp= 0, yp= 0) {
     return [
-        [1, 0, xp],
-        [0, 1, -yp],
-        [-xp, yp, 1]
+        [1, 0, -xp],
+        [0, 1, yp],
+        [xp, -yp, 1]
     ]
 }
 
-export function mpnrw_universal_address(ctx, lat, lon, height, date, sun_vector) {
+export function mpnrw_heliocentric_earth_m(ctx, jd_tt) {
+    var t= (jd_tt - 2451545) / 36525
+    var sun= mpnrw_sun_vector(ctx, jd_tt)
+    return mpnrw_multiply_matrix_vector(mpnrw_p_matrix(ctx, t), sun.map(v => v * -1000))
+}
+
+export function mpnrw_universal_address(ctx, lat, lon, height, date, origin_to_earth_m, orientation= {}) {
     invariant(typeof lat === 'number' && lat >= -90 && lat <= 90, 'Latitude must be a number between -90 and 90')
     invariant(typeof lon === 'number' && lon >= -180 && lon <= 180, 'Longitude must be a number between -180 and 180')
-    invariant(typeof height === 'number' && height >= 0, 'Height must be a number greater than or equal to 0')
+    invariant(Number.isFinite(height) && height >= 0, 'Height must be a number greater than or equal to 0')
     invariant(date instanceof Date, 'Date must be a Date object')
-    invariant(Array.isArray(sun_vector) && sun_vector.length === 3, 'Sun vector must be an array of 3 numbers')
+    invariant(Array.isArray(origin_to_earth_m) && origin_to_earth_m.length === 3 && Array.from(origin_to_earth_m).every(Number.isFinite), 'Origin offset must be an array of 3 numbers')
 
+    var { dut1= 0, tt_minus_utc= 0, xp= 0, yp= 0 }= orientation
+    invariant([dut1, tt_minus_utc, xp, yp].every(Number.isFinite), 'Invalid Earth orientation')
     var jd= mpnrw_julian_date(date)
-    var t= (jd - 2451545.0) / 36525
+    var jd_tt= jd + tt_minus_utc / 86400
+    var t= (jd_tt - 2451545) / 36525
     var local_v= mpnrw_to_ecef(ctx, lat, lon, height)
 
     var p= mpnrw_p_matrix(ctx, t)
     var n= mpnrw_n_matrix(ctx, t)
-    var r= mpnrw_r_matrix(ctx, jd)
-    var w= mpnrw_w_matrix()
+    var r= mpnrw_r_matrix(ctx, jd + dut1 / 86400)
+    var w= mpnrw_w_matrix(xp, yp)
 
     var m_pn= mpnrw_multiply_matrices(p, n)
     var m_pnr= mpnrw_multiply_matrices(m_pn, r)
@@ -229,9 +230,9 @@ export function mpnrw_universal_address(ctx, lat, lon, height, date, sun_vector)
     var space_v= mpnrw_multiply_matrix_vector(master_m, local_v)
 
     return [
-        space_v[0] + sun_vector[0],
-        space_v[1] + sun_vector[1],
-        space_v[2] + sun_vector[2]
+        space_v[0] + origin_to_earth_m[0],
+        space_v[1] + origin_to_earth_m[1],
+        space_v[2] + origin_to_earth_m[2]
     ]
 }
 
@@ -265,6 +266,10 @@ export class M_PNRW {
 
     get_distance(v1, v2) {
         return mpnrw_distance(v1, v2)
+    }
+
+    get_heliocentric_earth_m(jd_tt) {
+        return mpnrw_heliocentric_earth_m(this.#ctx, jd_tt)
     }
 
     get_sun_vector(jd) {
@@ -303,7 +308,7 @@ export class M_PNRW {
         return mpnrw_w_matrix(xp, yp)
     }
 
-    get_universal_address(lat, lon, height, date, sun_vector) {
-        return mpnrw_universal_address(this.#ctx, lat, lon, height, date, sun_vector)
+    get_universal_address(lat, lon, height, date, origin_to_earth_m, orientation= {}) {
+        return mpnrw_universal_address(this.#ctx, lat, lon, height, date, origin_to_earth_m, orientation)
     }
 }

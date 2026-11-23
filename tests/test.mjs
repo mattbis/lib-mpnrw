@@ -21,7 +21,7 @@ test('M_PNRW full pipeline produces finite 3D vector', () => {
 test('M_PNRW GMST sanity at J2000.0', () => {
     var engine= new M_PNRW()
     var r_mat= engine.get_r_matrix(2451545.0)
-    var theta_rad= Math.atan2(r_mat[0][1], r_mat[0][0])
+    var theta_rad= Math.atan2(r_mat[1][0], r_mat[0][0])
     if (theta_rad < 0) theta_rad= theta_rad + (2 * Math.PI)
     var gmst= theta_rad / (15 * (Math.PI / 180))
     assert.ok(Math.abs(gmst - 18.697) < 0.01)

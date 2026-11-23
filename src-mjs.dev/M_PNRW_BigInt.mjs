@@ -457,9 +457,9 @@ export function mpnrw_bigint_p_matrix(ctx, t) {
     var z= zeta
     var theta= mpnrw_fp_mul(mpnrw_fp_mul(c.p_theta, t), c.arcsec_to_rad)
 
-    var rz_zeta= mpnrw_bigint_rot_z(-zeta)
-    var ry_theta= mpnrw_bigint_rot_y(theta)
-    var rz_z= mpnrw_bigint_rot_z(-z)
+    var rz_zeta= mpnrw_bigint_rot_z(zeta)
+    var ry_theta= mpnrw_bigint_rot_y(-theta)
+    var rz_z= mpnrw_bigint_rot_z(z)
 
     return mpnrw_bigint_multiply_matrices(rz_z, mpnrw_bigint_multiply_matrices(ry_theta, rz_zeta))
 }
@@ -486,14 +486,13 @@ export function mpnrw_bigint_n_matrix(ctx, t) {
 
     var dp= mpnrw_fp_mul(d_psi, ctx.mas_to_rad)
     var de= mpnrw_fp_mul(d_eps, ctx.mas_to_rad)
-    var [sin_eps, cos_eps]= mpnrw_fp_sin_cos(eps)
-    var dp_cos= mpnrw_fp_mul(dp, cos_eps)
+    var [sin_eps]= mpnrw_fp_sin_cos(eps)
     var dp_sin= mpnrw_fp_mul(dp, sin_eps)
 
     return [
-        [SCALE, -dp_cos, -dp_sin],
-        [dp_cos, SCALE, -de],
-        [dp_sin, de, SCALE]
+        [SCALE, 0n, dp_sin],
+        [0n, SCALE, de],
+        [-dp_sin, -de, SCALE]
     ]
 }
 
@@ -507,35 +506,44 @@ export function mpnrw_bigint_r_matrix(ctx, jd) {
     var [s, cos_t]= mpnrw_fp_sin_cos(theta)
 
     return [
-        [cos_t, s, 0n],
-        [-s, cos_t, 0n],
+        [cos_t, -s, 0n],
+        [s, cos_t, 0n],
         [0n, 0n, SCALE]
     ]
 }
 
 export function mpnrw_bigint_w_matrix(xp= 0n, yp= 0n) {
     return [
-        [SCALE, 0n, xp],
-        [0n, SCALE, -yp],
-        [-xp, yp, SCALE]
+        [SCALE, 0n, -xp],
+        [0n, SCALE, yp],
+        [xp, -yp, SCALE]
     ]
 }
 
-export function mpnrw_bigint_universal_address(ctx, lat, lon, height, date, sun_vector) {
+export function mpnrw_bigint_heliocentric_earth_m(ctx, jd_tt) {
+    var t= mpnrw_fp_div(jd_tt - JD_J2000_80, ctx.c.days_per_century)
+    var sun= mpnrw_bigint_sun_vector(ctx, jd_tt)
+    return mpnrw_bigint_multiply_matrix_vector(mpnrw_bigint_p_matrix(ctx, t), sun.map(v => v * -1000n))
+}
+
+export function mpnrw_bigint_universal_address(ctx, lat, lon, height, date, origin_to_earth_m, orientation= {}) {
     invariant(typeof lat === 'bigint' && lat >= (-90n << SCALE_BITS) && lat <= (90n << SCALE_BITS), 'Latitude must be a Q.80 bigint between -90 and 90 degrees')
     invariant(typeof lon === 'bigint' && lon >= (-180n << SCALE_BITS) && lon <= (180n << SCALE_BITS), 'Longitude must be a Q.80 bigint between -180 and 180 degrees')
     invariant(typeof height === 'bigint' && height >= 0n, 'Height must be a non-negative Q.80 bigint')
     invariant((date instanceof Date) || (typeof date === 'bigint'), 'Date must be a Date object or bigint UTC milliseconds')
-    invariant(Array.isArray(sun_vector) && sun_vector.length === 3 && sun_vector.every((v) => typeof v === 'bigint'), 'Sun vector must be an array of 3 Q.80 bigints')
+    invariant(Array.isArray(origin_to_earth_m) && origin_to_earth_m.length === 3 && Array.from(origin_to_earth_m).every((v) => typeof v === 'bigint'), 'Origin offset must be an array of 3 Q.80 bigints')
 
+    var { dut1= 0n, tt_minus_utc= 0n, xp= 0n, yp= 0n }= orientation
+    invariant([dut1, tt_minus_utc, xp, yp].every(v => typeof v === 'bigint'), 'Invalid Earth orientation')
     var jd= mpnrw_bigint_julian_date(date)
-    var t= mpnrw_fp_div(jd - JD_J2000_80, ctx.c.days_per_century)
+    var jd_tt= jd + tt_minus_utc / 86400n
+    var t= mpnrw_fp_div(jd_tt - JD_J2000_80, ctx.c.days_per_century)
     var local_v= mpnrw_bigint_to_ecef(ctx, lat, lon, height)
 
     var p= mpnrw_bigint_p_matrix(ctx, t)
     var n= mpnrw_bigint_n_matrix(ctx, t)
-    var r= mpnrw_bigint_r_matrix(ctx, jd)
-    var w= mpnrw_bigint_w_matrix()
+    var r= mpnrw_bigint_r_matrix(ctx, jd + dut1 / 86400n)
+    var w= mpnrw_bigint_w_matrix(xp, yp)
 
     var m_pn= mpnrw_bigint_multiply_matrices(p, n)
     var m_pnr= mpnrw_bigint_multiply_matrices(m_pn, r)
@@ -543,9 +551,9 @@ export function mpnrw_bigint_universal_address(ctx, lat, lon, height, date, sun_
     var space_v= mpnrw_bigint_multiply_matrix_vector(master_m, local_v)
 
     return [
-        space_v[0] + sun_vector[0],
-        space_v[1] + sun_vector[1],
-        space_v[2] + sun_vector[2]
+        space_v[0] + origin_to_earth_m[0],
+        space_v[1] + origin_to_earth_m[1],
+        space_v[2] + origin_to_earth_m[2]
     ]
 }
 
@@ -601,6 +609,10 @@ export class M_PNRW_BigInt {
         return mpnrw_bigint_distance(v1, v2)
     }
 
+    get_heliocentric_earth_m(jd_tt) {
+        return mpnrw_bigint_heliocentric_earth_m(this.#ctx, jd_tt)
+    }
+
     get_sun_vector(jd) {
         return mpnrw_bigint_sun_vector(this.#ctx, jd)
     }
@@ -637,7 +649,7 @@ export class M_PNRW_BigInt {
         return mpnrw_bigint_w_matrix(xp, yp)
     }
 
-    get_universal_address(lat, lon, height, date, sun_vector) {
-        return mpnrw_bigint_universal_address(this.#ctx, lat, lon, height, date, sun_vector)
+    get_universal_address(lat, lon, height, date, origin_to_earth_m, orientation= {}) {
+        return mpnrw_bigint_universal_address(this.#ctx, lat, lon, height, date, origin_to_earth_m, orientation)
     }
 }
