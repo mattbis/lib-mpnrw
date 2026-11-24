@@ -282,6 +282,57 @@ export function mpnrw_fp_cos(angle) {
     return mpnrw_fp_sin_cos(angle)[1]
 }
 
+/**
+ * Computes atan(t) for 0 <= t <= 1 in Q.80 using 3 half-angle reductions
+ * followed by a Q.96 Taylor series.
+ */
+function fp_atan_unit(t) {
+    if (t === 0n) return 0n
+    var u= t
+    for (let k= 0; k < 3; k= k + 1) {
+        var root= mpnrw_fp_sqrt(SCALE + mpnrw_fp_mul(u, u))
+        u= mpnrw_fp_div(u, SCALE + root)
+    }
+
+    var u96= u << TRIG_GUARD_BITS
+    var u2_96= (u96 * u96) >> TRIG_SHIFT
+    var sum= u96
+    var pow= u96
+    for (let n= 1n; n <= 12n; n= n + 1n) {
+        pow= -((pow * u2_96) >> TRIG_SHIFT)
+        var term= pow / ((2n * n) + 1n)
+        if (term === 0n) break
+        sum= sum + term
+    }
+
+    var res= (sum >= 0n)
+        ? (sum + TRIG_HALF_GUARD) >> TRIG_GUARD_BITS
+        : -((-sum + TRIG_HALF_GUARD) >> TRIG_GUARD_BITS)
+    return res << 3n
+}
+
+export function mpnrw_fp_atan2(y, x) {
+    if (x === 0n && y === 0n) return 0n
+    var abs_x= (x < 0n)
+        ? -x
+        : x
+    var abs_y= (y < 0n)
+        ? -y
+        : y
+    var a= (abs_y <= abs_x)
+        ? fp_atan_unit(mpnrw_fp_div(abs_y, abs_x))
+        : HALF_PI_80 - fp_atan_unit(mpnrw_fp_div(abs_x, abs_y))
+
+    if (x >= 0n) {
+        return (y >= 0n)
+            ? a
+            : -a
+    }
+    return (y >= 0n)
+        ? PI_80 - a
+        : -(PI_80 - a)
+}
+
 // --- STATELESS ENGINE PRIMITIVES ---
 
 export function mpnrw_bigint_create_ctx() {
@@ -557,6 +608,111 @@ export function mpnrw_bigint_universal_address(ctx, lat, lon, height, date, orig
     ]
 }
 
+export function mpnrw_bigint_transpose_matrix(m) {
+    return [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]]
+    ]
+}
+
+export function mpnrw_bigint_invert_matrix(m) {
+    var c00= mpnrw_fp_mul(m[1][1], m[2][2]) - mpnrw_fp_mul(m[1][2], m[2][1])
+    var c01= mpnrw_fp_mul(m[1][2], m[2][0]) - mpnrw_fp_mul(m[1][0], m[2][2])
+    var c02= mpnrw_fp_mul(m[1][0], m[2][1]) - mpnrw_fp_mul(m[1][1], m[2][0])
+    var det= mpnrw_fp_mul(m[0][0], c00) + mpnrw_fp_mul(m[0][1], c01) + mpnrw_fp_mul(m[0][2], c02)
+    invariant(det !== 0n, 'mpnrw_bigint_invert_matrix: singular matrix')
+
+    return [
+        [
+            mpnrw_fp_div(c00, det),
+            mpnrw_fp_div(mpnrw_fp_mul(m[0][2], m[2][1]) - mpnrw_fp_mul(m[0][1], m[2][2]), det),
+            mpnrw_fp_div(mpnrw_fp_mul(m[0][1], m[1][2]) - mpnrw_fp_mul(m[0][2], m[1][1]), det)
+        ],
+        [
+            mpnrw_fp_div(c01, det),
+            mpnrw_fp_div(mpnrw_fp_mul(m[0][0], m[2][2]) - mpnrw_fp_mul(m[0][2], m[2][0]), det),
+            mpnrw_fp_div(mpnrw_fp_mul(m[0][2], m[1][0]) - mpnrw_fp_mul(m[0][0], m[1][2]), det)
+        ],
+        [
+            mpnrw_fp_div(c02, det),
+            mpnrw_fp_div(mpnrw_fp_mul(m[0][1], m[2][0]) - mpnrw_fp_mul(m[0][0], m[2][1]), det),
+            mpnrw_fp_div(mpnrw_fp_mul(m[0][0], m[1][1]) - mpnrw_fp_mul(m[0][1], m[1][0]), det)
+        ]
+    ]
+}
+
+export function mpnrw_bigint_from_ecef(ctx, x, y, z, a= MPNRW_BIGINT_CONSTANTS.WGS84_A, e_sq= MPNRW_BIGINT_CONSTANTS.WGS84_E_SQ) {
+    var lon_rad= mpnrw_fp_atan2(y, x)
+    var p= mpnrw_fp_sqrt(mpnrw_fp_mul(x, x) + mpnrw_fp_mul(y, y))
+
+    if (p === 0n) {
+        var lat_deg= (z >= 0n)
+            ? (90n << SCALE_BITS)
+            : -(90n << SCALE_BITS)
+        var b= mpnrw_fp_mul(a, mpnrw_fp_sqrt(SCALE - e_sq))
+        var abs_z= (z < 0n)
+            ? -z
+            : z
+        return { lat: lat_deg, lon: 0n, height: abs_z - b }
+    }
+
+    var lat_rad= mpnrw_fp_atan2(z, mpnrw_fp_mul(p, SCALE - e_sq))
+    for (let i= 0; i < 6; i= i + 1) {
+        var sin_lat= mpnrw_fp_sin(lat_rad)
+        var n_phi= mpnrw_fp_div(a, mpnrw_fp_sqrt(SCALE - mpnrw_fp_mul(e_sq, mpnrw_fp_mul(sin_lat, sin_lat))))
+        lat_rad= mpnrw_fp_atan2(z + mpnrw_fp_mul(mpnrw_fp_mul(e_sq, n_phi), sin_lat), p)
+    }
+
+    var [sin_f, cos_f]= mpnrw_fp_sin_cos(lat_rad)
+    var n_phi_f= mpnrw_fp_div(a, mpnrw_fp_sqrt(SCALE - mpnrw_fp_mul(e_sq, mpnrw_fp_mul(sin_f, sin_f))))
+    var abs_cos= (cos_f < 0n)
+        ? -cos_f
+        : cos_f
+    var abs_sin= (sin_f < 0n)
+        ? -sin_f
+        : sin_f
+    var height= (abs_cos >= abs_sin)
+        ? mpnrw_fp_div(p, cos_f) - n_phi_f
+        : mpnrw_fp_div(z, sin_f) - mpnrw_fp_mul(n_phi_f, SCALE - e_sq)
+
+    return {
+        lat: mpnrw_fp_div(lat_rad, ctx.rad_deg),
+        lon: mpnrw_fp_div(lon_rad, ctx.rad_deg),
+        height: height
+    }
+}
+
+export function mpnrw_bigint_decode_universal_address(ctx, address, date, origin_to_earth_m= [0n, 0n, 0n], orientation= {}) {
+    invariant(Array.isArray(address) && address.length === 3 && Array.from(address).every((v) => typeof v === 'bigint'), 'Address must be an array of 3 Q.80 bigints')
+    invariant((date instanceof Date) || (typeof date === 'bigint'), 'Date must be a Date object or bigint UTC milliseconds')
+    invariant(Array.isArray(origin_to_earth_m) && origin_to_earth_m.length === 3 && Array.from(origin_to_earth_m).every((v) => typeof v === 'bigint'), 'Origin offset must be an array of 3 Q.80 bigints')
+
+    var { dut1= 0n, tt_minus_utc= 0n, xp= 0n, yp= 0n }= orientation
+    invariant([dut1, tt_minus_utc, xp, yp].every((v) => typeof v === 'bigint'), 'Invalid Earth orientation')
+    var jd= mpnrw_bigint_julian_date(date)
+    var jd_tt= jd + tt_minus_utc / 86400n
+    var t= mpnrw_fp_div(jd_tt - JD_J2000_80, ctx.c.days_per_century)
+
+    var p= mpnrw_bigint_p_matrix(ctx, t)
+    var n= mpnrw_bigint_n_matrix(ctx, t)
+    var r= mpnrw_bigint_r_matrix(ctx, jd + dut1 / 86400n)
+    var w= mpnrw_bigint_w_matrix(xp, yp)
+
+    var m_pn= mpnrw_bigint_multiply_matrices(p, n)
+    var m_pnr= mpnrw_bigint_multiply_matrices(m_pn, r)
+    var master_m= mpnrw_bigint_multiply_matrices(m_pnr, w)
+    var inv_m= mpnrw_bigint_invert_matrix(master_m)
+
+    var space_v= [
+        address[0] - origin_to_earth_m[0],
+        address[1] - origin_to_earth_m[1],
+        address[2] - origin_to_earth_m[2]
+    ]
+    var local_v= mpnrw_bigint_multiply_matrix_vector(inv_m, space_v)
+    return mpnrw_bigint_from_ecef(ctx, local_v[0], local_v[1], local_v[2])
+}
+
 // --- THIN OOP CLASS WRAPPER ---
 
 export class M_PNRW_BigInt {
@@ -583,6 +739,7 @@ export class M_PNRW_BigInt {
     static fpSinCos= mpnrw_fp_sin_cos
     static fpSin= mpnrw_fp_sin
     static fpCos= mpnrw_fp_cos
+    static fpAtan2= mpnrw_fp_atan2
 
     #ctx
 
@@ -603,6 +760,14 @@ export class M_PNRW_BigInt {
 
     to_ecef(lat, lon, height, a= M_PNRW_BigInt.WGS84_A, e_sq= M_PNRW_BigInt.WGS84_E_SQ) {
         return mpnrw_bigint_to_ecef(this.#ctx, lat, lon, height, a, e_sq)
+    }
+
+    from_ecef(x, y, z, a= M_PNRW_BigInt.WGS84_A, e_sq= M_PNRW_BigInt.WGS84_E_SQ) {
+        return mpnrw_bigint_from_ecef(this.#ctx, x, y, z, a, e_sq)
+    }
+
+    transpose_matrix(m) {
+        return mpnrw_bigint_transpose_matrix(m)
     }
 
     get_distance(v1, v2) {
@@ -651,5 +816,9 @@ export class M_PNRW_BigInt {
 
     get_universal_address(lat, lon, height, date, origin_to_earth_m, orientation= {}) {
         return mpnrw_bigint_universal_address(this.#ctx, lat, lon, height, date, origin_to_earth_m, orientation)
+    }
+
+    decode_universal_address(address, date, origin_to_earth_m= [0n, 0n, 0n], orientation= {}) {
+        return mpnrw_bigint_decode_universal_address(this.#ctx, address, date, origin_to_earth_m, orientation)
     }
 }

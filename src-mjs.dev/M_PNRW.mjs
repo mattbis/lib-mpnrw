@@ -126,6 +126,61 @@ export function mpnrw_multiply_matrix_vector(m, v) {
     ]
 }
 
+export function mpnrw_transpose_matrix(m) {
+    return [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]]
+    ]
+}
+
+export function mpnrw_invert_matrix(m) {
+    var c00= (m[1][1] * m[2][2]) - (m[1][2] * m[2][1])
+    var c01= (m[1][2] * m[2][0]) - (m[1][0] * m[2][2])
+    var c02= (m[1][0] * m[2][1]) - (m[1][1] * m[2][0])
+    var det= (m[0][0] * c00) + (m[0][1] * c01) + (m[0][2] * c02)
+    invariant(det !== 0, 'mpnrw_invert_matrix: singular matrix')
+
+    return [
+        [c00 / det, ((m[0][2] * m[2][1]) - (m[0][1] * m[2][2])) / det, ((m[0][1] * m[1][2]) - (m[0][2] * m[1][1])) / det],
+        [c01 / det, ((m[0][0] * m[2][2]) - (m[0][2] * m[2][0])) / det, ((m[0][2] * m[1][0]) - (m[0][0] * m[1][2])) / det],
+        [c02 / det, ((m[0][1] * m[2][0]) - (m[0][0] * m[2][1])) / det, ((m[0][0] * m[1][1]) - (m[0][1] * m[1][0])) / det]
+    ]
+}
+
+export function mpnrw_from_ecef(ctx, x, y, z, a= MPNRW_CONSTANTS.WGS84_A, e_sq= MPNRW_CONSTANTS.WGS84_E_SQ) {
+    var lon_rad= Math.atan2(y, x)
+    var p= Math.hypot(x, y)
+
+    if (p === 0) {
+        var lat_deg= (z >= 0)
+            ? 90
+            : -90
+        var b= a * Math.sqrt(1 - e_sq)
+        return { lat: lat_deg, lon: 0, height: Math.abs(z) - b }
+    }
+
+    var lat_rad= Math.atan2(z, p * (1 - e_sq))
+    for (let i= 0; i < 6; i= i + 1) {
+        var sin_lat= Math.sin(lat_rad)
+        var n_phi= a / Math.sqrt(1 - e_sq * sin_lat * sin_lat)
+        lat_rad= Math.atan2(z + e_sq * n_phi * sin_lat, p)
+    }
+
+    var sin_f= Math.sin(lat_rad)
+    var cos_f= Math.cos(lat_rad)
+    var n_phi_f= a / Math.sqrt(1 - e_sq * sin_f * sin_f)
+    var height= (Math.abs(cos_f) >= Math.abs(sin_f))
+        ? (p / cos_f) - n_phi_f
+        : (z / sin_f) - (n_phi_f * (1 - e_sq))
+
+    return {
+        lat: lat_rad / ctx.rad_deg,
+        lon: lon_rad / ctx.rad_deg,
+        height: height
+    }
+}
+
 export function mpnrw_rot_y(angle) {
     var c= Math.cos(angle)
     var s= Math.sin(angle)
@@ -236,6 +291,36 @@ export function mpnrw_universal_address(ctx, lat, lon, height, date, origin_to_e
     ]
 }
 
+export function mpnrw_decode_universal_address(ctx, address, date, origin_to_earth_m= [0, 0, 0], orientation= {}) {
+    invariant(Array.isArray(address) && address.length === 3 && Array.from(address).every(Number.isFinite), 'Address must be an array of 3 numbers')
+    invariant(date instanceof Date, 'Date must be a Date object')
+    invariant(Array.isArray(origin_to_earth_m) && origin_to_earth_m.length === 3 && Array.from(origin_to_earth_m).every(Number.isFinite), 'Origin offset must be an array of 3 numbers')
+
+    var { dut1= 0, tt_minus_utc= 0, xp= 0, yp= 0 }= orientation
+    invariant([dut1, tt_minus_utc, xp, yp].every(Number.isFinite), 'Invalid Earth orientation')
+    var jd= mpnrw_julian_date(date)
+    var jd_tt= jd + tt_minus_utc / 86400
+    var t= (jd_tt - 2451545) / 36525
+
+    var p= mpnrw_p_matrix(ctx, t)
+    var n= mpnrw_n_matrix(ctx, t)
+    var r= mpnrw_r_matrix(ctx, jd + dut1 / 86400)
+    var w= mpnrw_w_matrix(xp, yp)
+
+    var m_pn= mpnrw_multiply_matrices(p, n)
+    var m_pnr= mpnrw_multiply_matrices(m_pn, r)
+    var master_m= mpnrw_multiply_matrices(m_pnr, w)
+    var inv_m= mpnrw_invert_matrix(master_m)
+
+    var space_v= [
+        address[0] - origin_to_earth_m[0],
+        address[1] - origin_to_earth_m[1],
+        address[2] - origin_to_earth_m[2]
+    ]
+    var local_v= mpnrw_multiply_matrix_vector(inv_m, space_v)
+    return mpnrw_from_ecef(ctx, local_v[0], local_v[1], local_v[2])
+}
+
 // --- THIN OOP CLASS WRAPPER ---
 
 export class M_PNRW {
@@ -260,8 +345,16 @@ export class M_PNRW {
         return mpnrw_julian_date(date)
     }
 
-    to_ecef(lat, lon, height, a= M_PNRW.WGS84_A, e_sq= M_PNRW.WGS84_E_SQ) {
+    to_ecef(lat, lon, height, a= MPNRW_CONSTANTS.WGS84_A, e_sq= MPNRW_CONSTANTS.WGS84_E_SQ) {
         return mpnrw_to_ecef(this.#ctx, lat, lon, height, a, e_sq)
+    }
+
+    from_ecef(x, y, z, a= MPNRW_CONSTANTS.WGS84_A, e_sq= MPNRW_CONSTANTS.WGS84_E_SQ) {
+        return mpnrw_from_ecef(this.#ctx, x, y, z, a, e_sq)
+    }
+
+    transpose_matrix(m) {
+        return mpnrw_transpose_matrix(m)
     }
 
     get_distance(v1, v2) {
@@ -310,5 +403,9 @@ export class M_PNRW {
 
     get_universal_address(lat, lon, height, date, origin_to_earth_m, orientation= {}) {
         return mpnrw_universal_address(this.#ctx, lat, lon, height, date, origin_to_earth_m, orientation)
+    }
+
+    decode_universal_address(address, date, origin_to_earth_m= [0, 0, 0], orientation= {}) {
+        return mpnrw_decode_universal_address(this.#ctx, address, date, origin_to_earth_m, orientation)
     }
 }

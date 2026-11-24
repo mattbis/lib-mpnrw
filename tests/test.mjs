@@ -60,3 +60,24 @@ test('M_PNRW mas_to_rad constant present', () => {
     assert.equal(typeof engine.mas_to_rad, 'number')
     assert.equal(typeof engine.ms_to_rad, 'undefined')
 })
+
+test('M_PNRW encode-round-decode music release acceptance (London Stone)', () => {
+    var engine= new M_PNRW()
+    var target= { lat: 51.5115, lon: -0.0898, height: 15 }
+    var date= new Date('2026-03-20T12:00:00Z')
+    var origin= engine.get_heliocentric_earth_m(engine.get_julian_date(date))
+
+    var encoded= engine.get_universal_address(target.lat, target.lon, target.height, date, origin)
+    var exact= engine.decode_universal_address(encoded, date, origin)
+    assert.ok(Math.abs(exact.lat - target.lat) < 1e-10)
+    assert.ok(Math.abs(exact.lon - target.lon) < 1e-10)
+    // At 1 AU (~1.5e11 m), float64 ULP is ~3.3e-5 m
+    assert.ok(Math.abs(exact.height - target.height) < 1e-4)
+
+    // Published liner-note rounding to integer meters
+    var published= encoded.map((v) => Math.round(v))
+    var decoded= engine.decode_universal_address(published, date, origin)
+    var orig_ecef= engine.to_ecef(target.lat, target.lon, target.height)
+    var dec_ecef= engine.to_ecef(decoded.lat, decoded.lon, decoded.height)
+    assert.ok(engine.get_distance(orig_ecef, dec_ecef) < 2)
+})

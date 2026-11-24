@@ -175,3 +175,39 @@ for (const fixed of [false, true]) {
         assert.deepEqual(offset, e.get_sun_vector(jd).map(v => v * (fixed ? -1000n : -1000)))
     })
 }
+
+test('M_PNRW_BigInt atan2 and encode-round-decode acceptance (London Stone)', () => {
+    var engine= new M_PNRW_BigInt()
+    var atan2_err= Math.abs(mpnrw_fp_to_number(M_PNRW_BigInt.fpAtan2(mpnrw_fp_from_decimal('1'), mpnrw_fp_from_decimal('-1'))) - (3 * Math.PI / 4))
+    assert.ok(atan2_err < 1e-15, `atan2_err=${atan2_err}`)
+
+    var target= { lat: 51.5115, lon: -0.0898, height: 15 }
+    var date= new Date('2026-03-20T12:00:00.123Z')
+    var orientation= {
+        dut1: mpnrw_fp_from_decimal('-0.12'),
+        tt_minus_utc: mpnrw_fp_from_decimal('69.184'),
+        xp: mpnrw_fp_from_decimal('0.00000025'),
+        yp: mpnrw_fp_from_decimal('0.00000186')
+    }
+    var origin= engine.get_heliocentric_earth_m(engine.get_julian_date(date))
+
+    var encoded= engine.get_universal_address(
+        mpnrw_fp_from_number(target.lat),
+        mpnrw_fp_from_number(target.lon),
+        mpnrw_fp_from_number(target.height),
+        date,
+        origin,
+        orientation
+    )
+    var exact= engine.decode_universal_address(encoded, date, origin, orientation)
+    assert.ok(Math.abs(mpnrw_fp_to_number(exact.lat) - target.lat) < 1e-12)
+    assert.ok(Math.abs(mpnrw_fp_to_number(exact.lon) - target.lon) < 1e-12)
+    assert.ok(Math.abs(mpnrw_fp_to_number(exact.height) - target.height) < 1e-8)
+
+    // Published liner-note rounding to integer meters
+    var published= encoded.map((v) => mpnrw_fp_from_int(Math.round(mpnrw_fp_to_number(v))))
+    var decoded= engine.decode_universal_address(published, date, origin, orientation)
+    var orig_ecef= engine.to_ecef(mpnrw_fp_from_number(target.lat), mpnrw_fp_from_number(target.lon), mpnrw_fp_from_number(target.height))
+    var dec_ecef= engine.to_ecef(decoded.lat, decoded.lon, decoded.height)
+    assert.ok(mpnrw_fp_to_number(engine.get_distance(orig_ecef, dec_ecef)) < 2)
+})
